@@ -15,7 +15,7 @@ A repo calls a workflow with a few lines. Copy a file from `examples/` into `.gi
 The review workflows run on demand only, to save subscription usage. Trigger one of two ways:
 
 - Add the PR label `ui-review` or `api-review`.
-- Comment `@claude ui-review` or `@claude api-review` on the PR (owner, member or collaborator only).
+- Comment `/ui-review` or `/api-review` on the PR (owner, member or collaborator only).
 
 They do not run on push.
 

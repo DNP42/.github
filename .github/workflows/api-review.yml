@@ -19,12 +19,12 @@ on:
 
 jobs:
   review:
-    # On demand only: PR label "api-review" or a comment "@claude api-review"
+    # On demand only: PR label "api-review" or a comment "/api-review"
     # from an owner, member or collaborator.
     if: |
       (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'api-review') ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
-       contains(github.event.comment.body, '@claude api-review') &&
+       contains(github.event.comment.body, '/api-review') &&
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     permissions:
