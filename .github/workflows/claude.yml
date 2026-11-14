@@ -1,0 +1,75 @@
+name: Claude (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: DNPclaude GitHub App ID
+        type: string
+        default: '5756777'
+      agent-log-issue:
+        description: Issue number that gets one log line per run (optional)
+        type: string
+        default: ''
+      allowed-tools:
+        description: Value for claude --allowedTools
+        type: string
+        default: 'Bash(npm install:*),Bash(npm ci:*),Bash(npm audit:*),Bash(npm run lint:*),Bash(npm run build:*)'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      DNPCLAUDE_PRIVATE_KEY:
+        required: true
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint DNPclaude token (this repo only)
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.DNPCLAUDE_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-actions: read
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: 'cursor'
+          claude_args: '--allowedTools "${{ inputs.allowed-tools }}"'
+          additional_permissions: |
+            actions: read
+
+      - name: Log run to agent log issue
+        if: ${{ always() && inputs.agent-log-issue != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LOG_ISSUE: ${{ inputs.agent-log-issue }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RESULT: ${{ steps.claude.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$LOG_ISSUE" --repo "$REPO" \
+            --body "$(date -u +%FT%TZ) claude.yml event=$EVENT result=$RESULT $RUN_URL"
