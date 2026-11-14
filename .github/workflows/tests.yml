@@ -1,0 +1,107 @@
+name: Tests (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      gate:
+        description: Shell command that must pass, for example "npm ci && npm run lint && npm run build"
+        type: string
+        required: true
+      node-version:
+        description: Node.js version
+        type: string
+        default: '22'
+      app-id:
+        description: DNPclaude GitHub App ID
+        type: string
+        default: '5756777'
+      agent-log-issue:
+        description: Issue number that gets one log line per run (optional)
+        type: string
+        default: ''
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      DNPCLAUDE_PRIVATE_KEY:
+        required: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint DNPclaude token (this repo only)
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.DNPCLAUDE_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
+          permission-pull-requests: write
+          permission-issues: write
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Run gate
+        id: gate
+        env:
+          GATE: ${{ inputs.gate }}
+        run: |
+          set +e
+          bash -o pipefail -c "$GATE" 2>&1 | tee "$RUNNER_TEMP/gate.log"
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Post sticky PR comment
+        if: ${{ always() && github.event.pull_request }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          CODE: ${{ steps.gate.outputs.code }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          marker='<!-- dnpclaude-tests -->'
+          if [ "$CODE" = "0" ]; then status='PASS'; else status="FAIL (exit ${CODE:-unknown})"; fi
+          {
+            echo "$marker"
+            echo "### Tests: $status"
+            echo
+            echo '```'
+            tail -n 30 "$RUNNER_TEMP/gate.log" 2>/dev/null | sed 's/```/` ` `/g'
+            echo '```'
+            echo
+            echo "[Run log]($RUN_URL)"
+          } > "$RUNNER_TEMP/comment.md"
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq "[.[] | select(.user.type==\"Bot\" and (.body | contains(\"$marker\")))] | first | .id // empty")
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@"$RUNNER_TEMP/comment.md" > /dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@"$RUNNER_TEMP/comment.md" > /dev/null
+          fi
+
+      - name: Log run to agent log issue
+        if: ${{ always() && inputs.agent-log-issue != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LOG_ISSUE: ${{ inputs.agent-log-issue }}
+          REPO: ${{ github.repository }}
+          CODE: ${{ steps.gate.outputs.code }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$LOG_ISSUE" --repo "$REPO" \
+            --body "$(date -u +%FT%TZ) tests.yml exit=$CODE $RUN_URL"
+
+      - name: Fail if gate failed
+        if: ${{ steps.gate.outputs.code != '0' }}
+        env:
+          CODE: ${{ steps.gate.outputs.code }}
+        run: exit "${CODE:-1}"

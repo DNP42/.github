@@ -1,0 +1,81 @@
+name: API review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: DNPclaude GitHub App ID
+        type: string
+        default: '5756777'
+      agent-log-issue:
+        description: Issue number that gets one log line per run (optional)
+        type: string
+        default: ''
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      DNPCLAUDE_PRIVATE_KEY:
+        required: true
+
+jobs:
+  review:
+    # On demand only: PR label "api-review" or a comment "/api-review"
+    # from an owner, member or collaborator.
+    if: |
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'api-review') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       contains(github.event.comment.body, '/api-review') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint DNPclaude token (this repo only)
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.DNPCLAUDE_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.event.pull_request && format('refs/pull/{0}/merge', github.event.pull_request.number) || format('refs/pull/{0}/head', github.event.issue.number) }}
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+
+      - name: Claude API review
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app.outputs.token }}
+          claude_args: '--allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"'
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+
+            Review this pull request. Focus only on the API:
+            routes, input validation, error handling and status codes,
+            authentication and authorization, and breaking changes to existing contracts.
+            Use "gh pr diff" and read the changed files. Do not edit files, do not push, do not run builds.
+            Post ONE review comment with "gh pr comment". Start it with "## API review".
+            List findings by severity (blocker, should fix, nit), each with file and line and a short fix.
+            If you find nothing, say so in one line. Keep it short.
+
+      - name: Log run to agent log issue
+        if: ${{ always() && inputs.agent-log-issue != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LOG_ISSUE: ${{ inputs.agent-log-issue }}
+          REPO: ${{ github.repository }}
+          RESULT: ${{ steps.claude.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$LOG_ISSUE" --repo "$REPO" \
+            --body "$(date -u +%FT%TZ) api-review.yml result=$RESULT $RUN_URL"
