@@ -32,17 +32,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Mint DNPclaude token (this repo only)
+      - name: Mint DNPclaude token (this repo only, all app permissions)
         id: app
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.DNPCLAUDE_PRIVATE_KEY }}
           repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-          permission-actions: read
 
       - name: Checkout repository
         uses: actions/checkout@v4
